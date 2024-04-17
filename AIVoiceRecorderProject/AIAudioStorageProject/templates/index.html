@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio Recorder</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px; /* Добавлены отступы по краям */
+            padding: 0;
+        }
+
+        h1 {
+            margin-top: 20px;
+        }
+
+        button {
+            margin: 10px;
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: #fff;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+
+        audio {
+            width: 100%;
+            margin-top: 20px;
+        }
+
+        .audio-container {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between; /* Равномерное распределение элементов */
+            gap: 10px;
+            margin-top: 20px;
+            padding: 10px; /* Добавлены отступы внутри контейнера */
+            background-color: #f0f0f0; /* Цвет фона для контейнера */
+            border-radius: 10px; /* Закругление углов контейнера */
+        }
+
+        .audio-item {
+            width: calc(20% - 10px); /* Одинаковая ширина для 5 элементов в ряду */
+            margin-bottom: 10px;
+            text-align: center;
+            padding: 10px; /* Добавлены отступы внутри элемента */
+            background-color: #fff; /* Цвет фона для элемента */
+            border-radius: 5px; /* Закругление углов элемента */
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2); /* Тень элемента */
+        }
+
+        .audio-item audio {
+            width: 100%;
+        }
+
+        .audio-item-controls {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 5px;
+        }
+
+        .audio-item-controls button {
+            background-color: #007bff;
+            color: #fff;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            padding: 5px 10px;
+        }
+
+        .audio-item-controls button:hover {
+            background-color: #0056b3;
+        }
+
+        /* CSS стили для всплывающего уведомления */
+        .notification {
+            display: none;
+            position: fixed;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 15px;
+            background-color: #007bff;
+            color: #fff;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+            z-index: 999;
+        }
+    </style>
+</head>
+<body>
+    <h1>Audio Recorder</h1>
+    <button id="startRecording">Start Recording</button>
+    <button id="stopRecording" disabled>Stop Recording</button>
+    <button id="saveAllRecordings" disabled>Download All Recordings</button>
+    <button id="uploadAllToS3" disabled>Upload All to Amazon S3</button>
+    <div class="audio-container" id="recordingsList"></div>
+    <div class="notification" id="notification">File successfully uploaded to Amazon S3</div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js"></script> <!-- Добавляем скрипт JSZip -->
+    <script src="https://sdk.amazonaws.com/js/aws-sdk-2.1163.0.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const startButton = document.getElementById('startRecording');
+            const stopButton = document.getElementById('stopRecording');
+            const saveAllButton = document.getElementById('saveAllRecordings');
+            const uploadAllButton = document.getElementById('uploadAllToS3');
+            const recordingsList = document.getElementById('recordingsList');
+            const notification = document.getElementById('notification');
+            let mediaRecorder;
+            let chunks = [];
+            let counter = 1;
+            let recordings = [];
+
+            function startRecording() {
+                navigator.mediaDevices.getUserMedia({ audio: true })
+                    .then(function(stream) {
+                        mediaRecorder = new MediaRecorder(stream);
+
+                        mediaRecorder.ondataavailable = function(e) {
+                            chunks.push(e.data);
+                        };
+
+                        mediaRecorder.onstop = function() {
+                            const audioBlob = new Blob(chunks, { type: 'audio/wav' });
+                            const audioUrl = URL.createObjectURL(audioBlob);
+                            const audioPlayer = document.createElement('audio');
+                            audioPlayer.controls = true;
+                            audioPlayer.src = audioUrl;
+                            const audioItem = document.createElement('div');
+                            audioItem.classList.add('audio-item');
+                            audioItem.dataset.number = counter;
+                            audioItem.textContent = `Recording ${counter}`;
+                            audioItem.appendChild(audioPlayer);
+                            const audioControls = document.createElement('div');
+                            audioControls.classList.add('audio-item-controls');
+                            const saveBtn = document.createElement('button');
+                            saveBtn.textContent = 'Save';
+                            saveBtn.addEventListener('click', function() {
+                                const anchor = document.createElement('a');
+                                anchor.href = audioPlayer.src;
+                                anchor.download = `recording_${audioItem.dataset.number}.wav`;
+                                anchor.click();
+                            });
+                            const overwriteBtn = document.createElement('button');
+                            overwriteBtn.textContent = 'Overwrite';
+                            overwriteBtn.addEventListener('click', function() {
+                                audioItem.remove();
+                                counter--;
+                                chunks = [];
+                                mediaRecorder.start();
+                                stopButton.disabled = false;
+                                startButton.disabled = true;
+                            });
+                            audioControls.appendChild(saveBtn);
+                            audioControls.appendChild(overwriteBtn);
+                            audioItem.appendChild(audioControls);
+                            recordingsList.appendChild(audioItem);
+                            chunks = [];
+                            counter++;
+                            recordings.push(audioBlob);
+                            updateButtons();
+                        };
+
+                        mediaRecorder.start();
+                        stopButton.disabled = false;
+                        startButton.disabled = true;
+                    })
+                    .catch(function(error) {
+                        console.error('Error accessing microphone:', error);
+                    });
+            }
+
+            function stopRecording() {
+                if (mediaRecorder && mediaRecorder.state === 'recording') {
+                    mediaRecorder.stop();
+                    startButton.disabled = false;
+                }
+            }
+
+            function updateButtons() {
+                if (recordingsList.children.length > 0) {
+                    saveAllButton.disabled = false;
+                    uploadAllButton.disabled = false;
+                } else {
+                    saveAllButton.disabled = true;
+                    uploadAllButton.disabled = true;
+                }
+            }
+
+            function downloadAllRecordings() {
+                const zip = new JSZip();
+                recordings.forEach((recording, index) => {
+                    const audioBlob = recording;
+                    const audioUrl = URL.createObjectURL(audioBlob);
+                    const filename = `recording_${index + 1}.wav`;
+                    zip.file(filename, audioBlob);
+                });
+                zip.generateAsync({ type: 'blob' })
+                    .then((content) => {
+                        const anchor = document.createElement('a');
+                        anchor.href = URL.createObjectURL(content);
+                        anchor.download = 'all_recordings.zip';
+                        anchor.click();
+                    });
+            }
+
+            function uploadAllToS3() {
+                const s3 = new AWS.S3();
+                recordings.forEach((recording, index) => {
+                    const params = {
+                        Bucket: 'voiseproject',
+                        Key: `recording_${index + 1}.wav`,
+                        Body: recording,
+                        ACL: 'public-read'
+                    };
+                    s3.upload(params, function(err, data) {
+                        if (err) {
+                            console.error('Error uploading to S3:', err);
+                        } else {
+                            console.log('Successfully uploaded to S3:', data.Location);
+                            notification.style.display = 'block';
+                        }
+                    });
+                });
+            }
+
+            startButton.addEventListener('click', startRecording);
+            stopButton.addEventListener('click', stopRecording);
+            saveAllButton.addEventListener('click', downloadAllRecordings);
+            uploadAllButton.addEventListener('click', uploadAllToS3);
+        });
+    </script>
+</body>
+</html>
